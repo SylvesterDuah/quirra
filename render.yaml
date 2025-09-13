@@ -12,26 +12,35 @@ services:
     healthCheckPath: /api/health
     autoDeploy: true
     envVars:
+      # Secrets
       - key: SECRET_KEY
         generateValue: true
       - key: QUIRRA_USER_SALT
         generateValue: true
+
+      # Prod toggles
       - key: DEBUG
         value: "0"
+
+      # DB connection from the database below
       - key: DATABASE_URL
         fromDatabase:
           name: quirra-db
           property: connectionString
+
+      # CORS: permissive for first tests (tighten later)
       - key: CORS_ALLOW_ALL_ORIGINS
         value: "1"
-      # tighten later:
+      # When your frontend is live, switch to explicit allowlists:
       # - key: CORS_ALLOWED_ORIGINS
       #   value: https://your-frontend.vercel.app
       # - key: CSRF_TRUSTED_ORIGINS
       #   value: https://your-frontend.vercel.app
+
+      # Optional: protect ingest endpoints
       # - key: INGEST_SECRET
-      #   value: paste-a-long-secret
-    postDeployCommand: python manage.py migrate
+      #   value: paste-a-long-random-secret
+    postdeploy: python manage.py migrate
 
 databases:
   - name: quirra-db
