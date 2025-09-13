@@ -1,0 +1,43 @@
+# render.yaml
+services:
+  - type: web
+    name: quirra-api
+    env: python
+    plan: free
+    buildCommand: |
+      pip install -r requirements.txt
+      python manage.py collectstatic --noinput || true
+    startCommand: gunicorn quirra.wsgi:application --bind 0.0.0.0:$PORT
+    autoDeploy: true
+    envVars:
+      # Secrets
+      - key: SECRET_KEY
+        generateValue: true
+      - key: QUIRRA_USER_SALT
+        generateValue: true
+      # Debug off in production
+      - key: DEBUG
+        value: "0"
+      - key: DATABASE_URL
+        fromDatabase:
+          name: quirra-db
+          property: connectionString
+      # For first tests you can allow all CORS; tighten with your Vercel domain later
+      - key: CORS_ALLOW_ALL_ORIGINS
+        value: "1"
+      # Optional hardening once you know the exact origins (comma-separated)
+      # - key: CORS_ALLOWED_ORIGINS
+      #   value: https://your-frontend.vercel.app
+      # - key: CSRF_TRUSTED_ORIGINS
+      #   value: https://your-frontend.vercel.app
+      # Optional: protect ingest endpoints from public use
+      # - key: INGEST_SECRET
+      #   value: your-long-random-secret
+    # Automatically run migrations after each deploy
+    postdeploy: python manage.py migrate
+
+databases:
+  - name: quirra-db
+    plan: free
+    ipAllowList: [] 
+    postgresMajorVersion: 15

@@ -1,0 +1,47 @@
+# --- OS / tooling ---
+.DS_Store
+Thumbs.db
+*.log
+*.tmp
+*.swp
+*.swo
+.vscode/
+.idea/
+*.code-workspace
+
+# --- Python / Django ---
+__pycache__/
+*.py[cod]
+*.sqlite3
+db.sqlite3
+venv/
+.venv/
+.env
+.env.*
+!.env.example
+staticfiles/
+media/
+.mypy_cache/
+.pytest_cache/
+
+# --- Node / Next.js / Monorepo ---
+node_modules/
+.pnp.*
+.next/
+out/
+dist/
+build/
+coverage/
+.turbo/
+.vercel/
+*.tsbuildinfo
+
+# --- Extension builds ---
+extensions/**/dist/
+extensions/**/build/
+extensions/**/package-lock.json
+extensions/**/.parcel-cache/
+extensions/**/.cache/
+
+# --- Misc ---
+*.zip
