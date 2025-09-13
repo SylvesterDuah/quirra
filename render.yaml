@@ -1,4 +1,4 @@
-# render.yaml
+# render.yaml (keep existing DB; omit version to avoid conflicts)
 services:
   - type: web
     name: quirra-api
@@ -8,9 +8,8 @@ services:
     buildCommand: |
       pip install -r requirements.txt
       python manage.py collectstatic --noinput || true
-    # Run migrations first, then launch gunicorn
     startCommand: bash -lc "python manage.py migrate --noinput && gunicorn quirra.wsgi:application --bind 0.0.0.0:$PORT"
-    healthCheckPath: /health/              # matches quirra/urls.py
+    healthCheckPath: /health/
     autoDeploy: true
     envVars:
       - key: SECRET_KEY
@@ -25,16 +24,9 @@ services:
           property: connectionString
       - key: CORS_ALLOW_ALL_ORIGINS
         value: "1"
-      # tighten later:
-      # - key: CORS_ALLOWED_ORIGINS
-      #   value: https://your-frontend.vercel.app
-      # - key: CSRF_TRUSTED_ORIGINS
-      #   value: https://your-frontend.vercel.app
-      # - key: INGEST_SECRET
-      #   value: paste-a-long-random-secret
 
 databases:
   - name: quirra-db
     plan: free
-    postgresMajorVersion: 15
+    # postgresMajorVersion: 16   # <- either set to the real version, or leave it OUT
     ipAllowList: []
