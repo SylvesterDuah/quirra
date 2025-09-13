@@ -1,4 +1,4 @@
-# render.yaml (keep existing DB; omit version to avoid conflicts)
+# render.yaml
 services:
   - type: web
     name: quirra-api
@@ -8,8 +8,9 @@ services:
     buildCommand: |
       pip install -r requirements.txt
       python manage.py collectstatic --noinput || true
+    # run migrations, then start gunicorn
     startCommand: bash -lc "python manage.py migrate --noinput && gunicorn quirra.wsgi:application --bind 0.0.0.0:$PORT"
-    healthCheckPath: /health/
+    healthCheckPath: /              
     autoDeploy: true
     envVars:
       - key: SECRET_KEY
@@ -28,5 +29,4 @@ services:
 databases:
   - name: quirra-db
     plan: free
-    # postgresMajorVersion: 16   # <- either set to the real version, or leave it OUT
     ipAllowList: []
