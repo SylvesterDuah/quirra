@@ -4,46 +4,33 @@ services:
     name: quirra-api
     env: python
     plan: free
-    region: oregon            # or frankfurt/singapore if you prefer
+    region: oregon
     buildCommand: |
       pip install -r requirements.txt
       python manage.py collectstatic --noinput || true
     startCommand: gunicorn quirra.wsgi:application --bind 0.0.0.0:$PORT
-    healthCheckPath: /api/health          # optional, if you add this endpoint
+    healthCheckPath: /api/health
     autoDeploy: true
     envVars:
-      # Secrets (Render will generate secure values)
       - key: SECRET_KEY
         generateValue: true
       - key: QUIRRA_USER_SALT
         generateValue: true
-
-      # Prod toggles
       - key: DEBUG
         value: "0"
-
-      # DB connection injected from the database defined below
       - key: DATABASE_URL
         fromDatabase:
           name: quirra-db
           property: connectionString
-
-      # CORS: keep permissive for initial testing; tighten later
       - key: CORS_ALLOW_ALL_ORIGINS
         value: "1"
-      # When your frontend is live, replace with allowed origins and comment out the line above:
+      # tighten later:
       # - key: CORS_ALLOWED_ORIGINS
-      #   value: https://your-frontend.vercel.app,https://your-custom-domain.com
+      #   value: https://your-frontend.vercel.app
       # - key: CSRF_TRUSTED_ORIGINS
-      #   value: https://your-frontend.vercel.app,https://your-custom-domain.com
-
-      # Optional: protect ingest endpoints used by the extension
+      #   value: https://your-frontend.vercel.app
       # - key: INGEST_SECRET
-      #   value: paste-a-long-random-secret-here
-
-      # (Optional) lock Python version
-      # - key: PYTHON_VERSION
-      #   value: 3.11.9
+      #   value: paste-a-long-secret
     postDeployCommand: python manage.py migrate
 
 databases:
