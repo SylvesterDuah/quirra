@@ -19,15 +19,30 @@ import logging
 
 logger = logging.getLogger(__name__)
 
-def _salt() -> bytes:
-    # Return bytes for keyed hashing. Prioritize settings then environment.
+
+def _derive_key_from_salt() -> bytes | None:
+    """
+    Return a bytes key that is suitable for blake2s key param (<= 32 bytes).
+    If QUIRRA_USER_SALT is not set, return None.
+    If salt is longer than 32 bytes, derive a 32-byte key by hashing the salt
+    with SHA-256 and taking the first 32 bytes.
+    """
     val = getattr(settings, "QUIRRA_USER_SALT", "") or os.environ.get("QUIRRA_USER_SALT", "")
-    return (val or "").encode("utf-8")
+    if not val:
+        return None
+    b = val.encode("utf-8")
+    if len(b) <= 32:
+        # OK to use raw bytes as key
+        return b
+    # Derive a 32-byte key deterministically
+    digest = hashlib.sha256(b).digest()
+    return digest[:32]
 
 class HashUser(APIView):
     """
-    POST /api/v1/hash { "user_id": "..." } -> { "user_hash": "<hex>" }
-    Handles errors gracefully and logs details to server logs.
+    POST /api/v1/hash   { "user_id": "stable-browser-or-account-id" }
+    -> { "user_hash": "<hex blake2s keyed>" }
+    This view is defensive: returns clear JSON errors and logs internal details.
     """
     permission_classes = [AllowAny]
 
@@ -37,21 +52,26 @@ class HashUser(APIView):
             if not user_id:
                 return Response({"detail": "user_id required"}, status=status.HTTP_400_BAD_REQUEST)
 
-            key = _salt()
+            key = _derive_key_from_salt()
             if not key:
-                # defensive: log once and return 500 with non-secret message
-                logger.error("HashUser: QUIRRA_USER_SALT not configured")
-                return Response({"detail": "Server configuration error (salt missing)"}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
+                # configuration problem; log note for operator
+                logger.error("HashUser: QUIRRA_USER_SALT is not configured")
+                return Response(
+                    {"detail": "Server configuration error: QUIRRA_USER_SALT not set"},
+                    status=status.HTTP_500_INTERNAL_SERVER_ERROR,
+                )
 
-            # Use BLAKE2s keyed hashing for stable mapping without storing raw ids
+            # Use BLAKE2s keyed hashing to produce a stable user hash.
+            # digest_size=32 -> 64 hex chars
             h = hashlib.blake2s(digest_size=32, key=key)
             h.update(user_id.encode("utf-8"))
-            return Response({"user_hash": h.hexdigest()})
-        except Exception as exc:
-            # Log the full exception (stack trace) to server logs (not returned to user)
+            user_hash = h.hexdigest()
+            return Response({"user_hash": user_hash})
+
+        except Exception:
+            # Log full stack trace for debugging but return generic 500 to clients.
             logger.exception("HashUser: unexpected error")
             return Response({"detail": "Internal server error"}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
-
 
 
 class PostEvent(APIView):
