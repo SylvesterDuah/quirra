@@ -15,23 +15,44 @@ from analysis.engine import compute_analysis
 
 from .serializers import EventSerializer, AnalysisResultSerializer, FlagSerializer
 
+import logging
+
+logger = logging.getLogger(__name__)
+
 def _salt() -> bytes:
+    # Return bytes for keyed hashing. Prioritize settings then environment.
     val = getattr(settings, "QUIRRA_USER_SALT", "") or os.environ.get("QUIRRA_USER_SALT", "")
-    return val.encode("utf-8")
+    return (val or "").encode("utf-8")
 
 class HashUser(APIView):
+    """
+    POST /api/v1/hash { "user_id": "..." } -> { "user_hash": "<hex>" }
+    Handles errors gracefully and logs details to server logs.
+    """
     permission_classes = [AllowAny]
 
     def post(self, request):
-        user_id = (request.data or {}).get("user_id", "")
-        if not user_id:
-            return Response({"detail": "user_id required"}, status=400)
-        key = _salt()
-        if not key:
-            return Response({"detail": "QUIRRA_USER_SALT not configured"}, status=500)
-        h = hashlib.blake2s(digest_size=32, key=key)
-        h.update(user_id.encode("utf-8"))
-        return Response({"user_hash": h.hexdigest()})
+        try:
+            user_id = (request.data or {}).get("user_id", "")
+            if not user_id:
+                return Response({"detail": "user_id required"}, status=status.HTTP_400_BAD_REQUEST)
+
+            key = _salt()
+            if not key:
+                # defensive: log once and return 500 with non-secret message
+                logger.error("HashUser: QUIRRA_USER_SALT not configured")
+                return Response({"detail": "Server configuration error (salt missing)"}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
+
+            # Use BLAKE2s keyed hashing for stable mapping without storing raw ids
+            h = hashlib.blake2s(digest_size=32, key=key)
+            h.update(user_id.encode("utf-8"))
+            return Response({"user_hash": h.hexdigest()})
+        except Exception as exc:
+            # Log the full exception (stack trace) to server logs (not returned to user)
+            logger.exception("HashUser: unexpected error")
+            return Response({"detail": "Internal server error"}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
+
+
 
 class PostEvent(APIView):
     permission_classes = [AllowAny]

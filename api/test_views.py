@@ -3,40 +3,27 @@ import json
 import hashlib
 from django.http import JsonResponse
 from django.views.decorators.csrf import csrf_exempt
+from django.views.decorators.http import require_http_methods
 
-def simple_hash_user(user_id: str) -> str:
-    h = hashlib.sha256(user_id.encode("utf-8")).hexdigest()[:40]
-    return h
-
+@require_http_methods(["POST", "GET"])
 @csrf_exempt
 def test_hash(request):
+    """
+    Lightweight test-only endpoint that returns a deterministic hash of user_id
+    without relying on QUIRRA_USER_SALT or the database.
+    Use only for testing/debugging.
+    """
     try:
-        payload = json.loads(request.body.decode() or "{}")
-        user_id = payload.get("user_id") or "anon"
+        if request.method == "POST":
+            try:
+                body = json.loads(request.body.decode("utf-8") or "{}")
+            except Exception:
+                return JsonResponse({"detail": "invalid json"}, status=400)
+            user_id = body.get("user_id") or "anon"
+        else:
+            user_id = request.GET.get("user_id", "anon")
     except Exception:
-        return JsonResponse({"detail": "invalid json"}, status=400)
-    user_hash = simple_hash_user(user_id)
-    return JsonResponse({"user_hash": user_hash})
+        user_id = "anon"
 
-@csrf_exempt
-def test_event_create(request):
-    try:
-        payload = json.loads(request.body.decode() or "{}")
-    except Exception:
-        return JsonResponse({"detail": "invalid json"}, status=400)
-    event_id = hashlib.sha1(json.dumps(payload, sort_keys=True).encode()).hexdigest()[:16]
-    return JsonResponse({"event_id": event_id})
-
-def test_event_analysis(request, event_id):
-    sample = {
-        "event_id": event_id,
-        "status": "done",
-        "scores": {
-            "risk": 12,
-            "duplication_pct": 4,
-            "style_pct": 18,
-            "seen_count": 0
-        },
-        "neighbors": []
-    }
-    return JsonResponse(sample)
+    h = hashlib.sha256(user_id.encode("utf-8")).hexdigest()[:40]
+    return JsonResponse({"user_hash": h})
