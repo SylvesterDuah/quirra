@@ -1,6 +1,6 @@
-# api/views.py
-import hashlib
+# api/views.py (DRF style)
 import os
+import hashlib
 from django.conf import settings
 from django.shortcuts import get_object_or_404
 from rest_framework import status
@@ -15,17 +15,11 @@ from analysis.engine import compute_analysis
 
 from .serializers import EventSerializer, AnalysisResultSerializer, FlagSerializer
 
-
 def _salt() -> bytes:
     val = getattr(settings, "QUIRRA_USER_SALT", "") or os.environ.get("QUIRRA_USER_SALT", "")
     return val.encode("utf-8")
 
-
 class HashUser(APIView):
-    """
-    POST /api/v1/hash   { "user_id": "stable-browser-or-account-id" }
-    -> { "user_hash": "<hex blake2s keyed>" }
-    """
     permission_classes = [AllowAny]
 
     def post(self, request):
@@ -39,13 +33,7 @@ class HashUser(APIView):
         h.update(user_id.encode("utf-8"))
         return Response({"user_hash": h.hexdigest()})
 
-
 class PostEvent(APIView):
-    """
-    POST /api/v1/events
-    { "project": null|uuid, "kind": "prompt"|"response", "content": "...", "metadata": {...} }
-    -> { "event_id": "<uuid>" }
-    """
     permission_classes = [AllowAny]
 
     def post(self, request):
@@ -56,12 +44,7 @@ class PostEvent(APIView):
             compute_analysis(event)
         return Response({"event_id": str(event.pk)}, status=status.HTTP_201_CREATED)
 
-
 class GetAnalysis(APIView):
-    """
-    GET /api/v1/events/<uuid>/analysis
-    If missing, compute on-demand (covers prompts or missed async jobs)
-    """
     permission_classes = [AllowAny]
 
     def get(self, request, event_id: str):
@@ -74,9 +57,7 @@ class GetAnalysis(APIView):
         data["status"] = "done"
         return Response(data)
 
-
 class FlagsList(APIView):
-    """GET /api/v1/flags  -> latest flags (100)"""
     permission_classes = [AllowAny]
 
     def get(self, request):
