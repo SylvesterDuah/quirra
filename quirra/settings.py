@@ -49,7 +49,7 @@ MIDDLEWARE = [
     # WhiteNoise for static files on Render/any WSGI
     "whitenoise.middleware.WhiteNoiseMiddleware",
 
-    # CORS must be before CommonMiddleware
+    # CORS must come before CommonMiddleware
     "corsheaders.middleware.CorsMiddleware",
 
     "django.contrib.sessions.middleware.SessionMiddleware",
@@ -104,7 +104,8 @@ REST_FRAMEWORK = {
 }
 
 # ------------------------------------------------------------------ CORS / CSRF
-# Permissive for first tests
+# By default, allow all origins to make testing easier.
+# For production, set CORS_ALLOW_ALL_ORIGINS=0 and configure CORS_ALLOWED_ORIGINS env var.
 CORS_ALLOW_ALL_ORIGINS = os.environ.get("CORS_ALLOW_ALL_ORIGINS", "1") in ("1", "true", "True")
 
 _allowed = [s.strip() for s in os.environ.get("CORS_ALLOWED_ORIGINS", "").split(",") if s.strip()]
@@ -128,6 +129,7 @@ QUIRRA_DEFAULTS = {
 INGEST_SECRET = os.environ.get("INGEST_SECRET", "")
 
 # Salt for server-side keyed hashing (/api/v1/hash)
+# NOTE: Must be kept secret. If longer than 32 bytes the code will derive a 32-byte key automatically.
 QUIRRA_USER_SALT = os.environ.get("QUIRRA_USER_SALT", "")
 
 # ------------------------------------------------------------------ Celery (optional)
