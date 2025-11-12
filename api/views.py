@@ -15,8 +15,12 @@ from rest_framework.views import APIView
 
 logger = logging.getLogger(__name__)
 
-# --- Try to import DB-backed models/serializers/analysis engine.
-USE_DB = True
+# ------------------------------------------------------------------
+# FORCE DB-LESS MODE FOR TESTING
+# ------------------------------------------------------------------
+USE_DB = False  # Always run in fallback mode for testing (no database)
+
+# You can safely comment this import block out while testing.
 try:
     from events.models import Event
     from analysis.models import AnalysisResult
@@ -27,10 +31,11 @@ except Exception as exc:  # pragma: no cover
     USE_DB = False
 
 
+# ------------------------------------------------------------------
+# Utility helpers
+# ------------------------------------------------------------------
 def _ephemeral_event_id(payload: dict) -> str:
-    """
-    Create a stable ephemeral event id for DB-less testing so clients can poll for analysis.
-    """
+    """Create a stable ephemeral event id for DB-less testing so clients can poll for analysis."""
     try:
         j = json.dumps(payload or {}, sort_keys=True, ensure_ascii=False)
     except Exception:
@@ -42,8 +47,6 @@ def _derive_key_from_salt() -> Optional[bytes]:
     """
     Return a bytes key suitable for blake2s key param (<= 32 bytes).
     If QUIRRA_USER_SALT is not set, return None.
-    If salt is longer than 32 bytes, derive a 32-byte key by hashing the salt
-    with SHA-256 and taking the first 32 bytes.
     """
     val = getattr(settings, "QUIRRA_USER_SALT", "") or os.environ.get("QUIRRA_USER_SALT", "")
     if not val:
@@ -63,9 +66,6 @@ class HashUser(APIView):
     POST /api/v1/hash
     Request payload: { "user_id": "<stable-id>" }
     Response: { "user_hash": "<hex 64 chars>" }
-    Behavior:
-      - If QUIRRA_USER_SALT is not configured -> 500 with JSON error
-      - Otherwise compute BLAKE2s keyed digest (digest_size=32 -> 64 hex chars)
     """
     permission_classes = [AllowAny]
 
@@ -95,14 +95,9 @@ class HashUser(APIView):
 class PostEvent(APIView):
     """
     POST /api/v1/events
-    Accepts JSON payload with required fields:
-      - kind: "prompt" or "response"
-      - content: string
-      - metadata: optional dict
-    Returns: { "event_id": "<uuid or ephemeral id>" }
     Works in two modes:
-      - USE_DB True: performs serializer validation and saves an Event instance.
-      - USE_DB False: returns an ephemeral id for testing and does not persist.
+      - DB-less: returns ephemeral id
+      - DB: saves and analyzes (disabled in this mode)
     """
     permission_classes = [AllowAny]
 
@@ -112,22 +107,14 @@ class PostEvent(APIView):
             kind = payload.get("kind")
             content = payload.get("content")
             if not kind or not content:
-                return Response({"detail": "kind and content fields are required"}, status=status.HTTP_400_BAD_REQUEST)
+                return Response(
+                    {"detail": "kind and content fields are required"},
+                    status=status.HTTP_400_BAD_REQUEST,
+                )
 
-            if USE_DB:
-                ser = EventSerializer(data=payload)
-                ser.is_valid(raise_exception=True)
-                event = ser.save()
-                # Optionally compute analysis synchronously for responses.
-                if getattr(event, "kind", "") == "response":
-                    try:
-                        compute_analysis(event)
-                    except Exception:
-                        logger.exception("compute_analysis failed for event %s (continuing)", getattr(event, "pk", "<unknown>"))
-                return Response({"event_id": str(event.pk)}, status=status.HTTP_201_CREATED)
-            else:
-                event_id = _ephemeral_event_id(payload)
-                return Response({"event_id": event_id}, status=status.HTTP_201_CREATED)
+            # Always fallback path (no DB writes)
+            event_id = _ephemeral_event_id(payload)
+            return Response({"event_id": event_id, "status": "created"}, status=status.HTTP_201_CREATED)
 
         except Exception:
             logger.exception("PostEvent: unexpected error")
@@ -137,35 +124,24 @@ class PostEvent(APIView):
 class GetAnalysis(APIView):
     """
     GET /api/v1/events/<event_id>/analysis
-    If DB available: return AnalysisResult (or compute on demand)
-    If DB not available: return canned example analysis to allow front-end testing.
+    Always returns a canned example analysis in DB-less mode.
     """
     permission_classes = [AllowAny]
 
     def get(self, request, event_id: str):
         try:
-            if USE_DB:
-                event = get_object_or_404(Event, pk=event_id)
-                try:
-                    ar = AnalysisResult.objects.get(event=event)
-                except AnalysisResult.DoesNotExist:
-                    ar = compute_analysis(event)
-                data = AnalysisResultSerializer(ar).data
-                data["status"] = "done"
-                return Response(data)
-            else:
-                sample = {
-                    "event_id": event_id,
-                    "status": "done",
-                    "scores": {
-                        "risk": 12,
-                        "duplication_pct": 4,
-                        "style_pct": 18,
-                        "seen_count": 0,
-                    },
-                    "neighbors": [],
-                }
-                return Response(sample)
+            sample = {
+                "event_id": event_id,
+                "status": "done",
+                "scores": {
+                    "risk": 12,
+                    "duplication_pct": 4,
+                    "style_pct": 18,
+                    "seen_count": 0,
+                },
+                "neighbors": [],
+            }
+            return Response(sample)
         except Exception:
             logger.exception("GetAnalysis: unexpected error for event_id=%s", event_id)
             return Response({"detail": "Internal server error"}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
@@ -173,20 +149,14 @@ class GetAnalysis(APIView):
 
 class FlagsList(APIView):
     """
-    GET /api/v1/flags -> latest flags (100)
-    Returns empty list in DB-less mode.
+    GET /api/v1/flags
+    Always returns empty list in DB-less mode.
     """
     permission_classes = [AllowAny]
 
     def get(self, request):
         try:
-            if USE_DB:
-                from flags.models import Flag  # local import to avoid top-level failure when DB missing
-                from .serializers import FlagSerializer
-                flags = Flag.objects.order_by("-created_at")[:100]
-                return Response(FlagSerializer(flags, many=True).data)
-            else:
-                return Response([])
+            return Response([])
         except Exception:
             logger.exception("FlagsList: unexpected error")
             return Response({"detail": "Internal server error"}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
