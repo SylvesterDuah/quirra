@@ -16,18 +16,17 @@ from rest_framework.views import APIView
 logger = logging.getLogger(__name__)
 
 # ------------------------------------------------------------------
-# FORCE DB-LESS MODE FOR TESTING
+# DB MODE — always attempt real DB; fall back only if imports fail
 # ------------------------------------------------------------------
-USE_DB = False  # Always run in fallback mode for testing (no database)
+USE_DB = True  
 
-# You can safely comment this import block out while testing.
 try:
     from events.models import Event
     from analysis.models import AnalysisResult
     from .serializers import EventSerializer, AnalysisResultSerializer
-    from analysis.engine import compute_analysis
-except Exception as exc:  # pragma: no cover
-    logger.info("api.views running in DB-less fallback mode: %s", exc)
+    from analysis.tasks import analyze_event  
+except Exception as exc:
+    logger.warning("api.views: DB imports failed, running in fallback mode: %s", exc)
     USE_DB = False
 
 
@@ -35,27 +34,41 @@ except Exception as exc:  # pragma: no cover
 # Utility helpers
 # ------------------------------------------------------------------
 def _ephemeral_event_id(payload: dict) -> str:
-    """Create a stable ephemeral event id for DB-less testing so clients can poll for analysis."""
+    """Stable ephemeral event id for DB-less fallback mode."""
     try:
         j = json.dumps(payload or {}, sort_keys=True, ensure_ascii=False)
     except Exception:
         j = str(payload)
-    return hashlib.sha1(j.encode("utf-8")).hexdigest()[:16]
+    return hashlib.sha256(j.encode("utf-8")).hexdigest()[:16]
 
 
 def _derive_key_from_salt() -> Optional[bytes]:
-    """
-    Return a bytes key suitable for blake2s key param (<= 32 bytes).
-    If QUIRRA_USER_SALT is not set, return None.
-    """
+    """Return a bytes key suitable for blake2s (<=32 bytes), or None."""
     val = getattr(settings, "QUIRRA_USER_SALT", "") or os.environ.get("QUIRRA_USER_SALT", "")
     if not val:
         return None
     b = val.encode("utf-8")
     if len(b) <= 32:
         return b
-    digest = hashlib.sha256(b).digest()
-    return digest[:32]
+    return hashlib.sha256(b).digest()[:32]
+
+
+def _check_ingest_secret(request) -> bool:
+    """
+    Validate INGEST_SECRET if configured.
+    Accepts it as X-Ingest-Secret header or ?secret= query param.
+    If INGEST_SECRET is empty, only allow requests from localhost.
+    """
+    secret = getattr(settings, "INGEST_SECRET", "") or os.environ.get("INGEST_SECRET", "")
+    if secret:
+        provided = (
+            request.headers.get("X-Ingest-Secret")
+            or request.GET.get("secret")
+            or ""
+        )
+        return provided == secret
+    remote = request.META.get("REMOTE_ADDR", "")
+    return remote in ("127.0.0.1", "::1", "localhost")
 
 
 # ------------------------------------------------------------------
@@ -64,7 +77,7 @@ def _derive_key_from_salt() -> Optional[bytes]:
 class HashUser(APIView):
     """
     POST /api/v1/hash
-    Request payload: { "user_id": "<stable-id>" }
+    Request:  { "user_id": "<stable-id>" }
     Response: { "user_hash": "<hex 64 chars>" }
     """
     permission_classes = [AllowAny]
@@ -85,8 +98,7 @@ class HashUser(APIView):
 
             h = hashlib.blake2s(digest_size=32, key=key)
             h.update(user_id.encode("utf-8"))
-            user_hash = h.hexdigest()
-            return Response({"user_hash": user_hash})
+            return Response({"user_hash": h.hexdigest()})
         except Exception:
             logger.exception("HashUser: unexpected error")
             return Response({"detail": "Internal server error"}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
@@ -95,26 +107,53 @@ class HashUser(APIView):
 class PostEvent(APIView):
     """
     POST /api/v1/events
-    Works in two modes:
-      - DB-less: returns ephemeral id
-      - DB: saves and analyzes (disabled in this mode)
+    Ingests a prompt or response event and enqueues async analysis.
+    Requires X-Ingest-Secret header (or localhost) when INGEST_SECRET is set.
     """
     permission_classes = [AllowAny]
 
     def post(self, request):
         try:
+            if not _check_ingest_secret(request):
+                return Response({"detail": "Forbidden"}, status=status.HTTP_403_FORBIDDEN)
+
             payload = request.data if isinstance(request.data, dict) else {}
             kind = payload.get("kind")
             content = payload.get("content")
+
             if not kind or not content:
                 return Response(
                     {"detail": "kind and content fields are required"},
                     status=status.HTTP_400_BAD_REQUEST,
                 )
+            if kind not in ("prompt", "response"):
+                return Response(
+                    {"detail": "kind must be 'prompt' or 'response'"},
+                    status=status.HTTP_400_BAD_REQUEST,
+                )
 
-            # Always fallback path (no DB writes)
-            event_id = _ephemeral_event_id(payload)
-            return Response({"event_id": event_id, "status": "created"}, status=status.HTTP_201_CREATED)
+            if not USE_DB:
+                event_id = _ephemeral_event_id(payload)
+                return Response(
+                    {"event_id": event_id, "status": "created", "mode": "ephemeral"},
+                    status=status.HTTP_201_CREATED,
+                )
+
+            event = Event.objects.create(
+                kind=kind,
+                content=content,
+                content_sha256=Event.sha256(content),
+                canonical_sha256=Event.sha256(" ".join(content.lower().split())),
+                tokens_len=len(content.split()),
+                metadata=payload.get("metadata") or {},
+            )
+
+            analyze_event.delay(str(event.pk))
+
+            return Response(
+                {"event_id": str(event.pk), "status": "created"},
+                status=status.HTTP_201_CREATED,
+            )
 
         except Exception:
             logger.exception("PostEvent: unexpected error")
@@ -124,24 +163,39 @@ class PostEvent(APIView):
 class GetAnalysis(APIView):
     """
     GET /api/v1/events/<event_id>/analysis
-    Always returns a canned example analysis in DB-less mode.
+    Returns real analysis, or 202 if still processing.
     """
     permission_classes = [AllowAny]
 
     def get(self, request, event_id: str):
         try:
-            sample = {
+            if not USE_DB:
+                return Response(
+                    {
+                        "event_id": event_id,
+                        "status": "unavailable",
+                        "detail": "Running in DB-less mode; analysis not available.",
+                    },
+                    status=status.HTTP_503_SERVICE_UNAVAILABLE,
+                )
+
+            event = get_object_or_404(Event, pk=event_id)
+
+            try:
+                ar = AnalysisResult.objects.get(event=event)
+            except AnalysisResult.DoesNotExist:
+                return Response(
+                    {"event_id": event_id, "status": "pending"},
+                    status=status.HTTP_202_ACCEPTED,
+                )
+
+            return Response({
                 "event_id": event_id,
                 "status": "done",
-                "scores": {
-                    "risk": 12,
-                    "duplication_pct": 4,
-                    "style_pct": 18,
-                    "seen_count": 0,
-                },
-                "neighbors": [],
-            }
-            return Response(sample)
+                "scores": ar.scores,
+                "neighbors": ar.neighbors,
+            })
+
         except Exception:
             logger.exception("GetAnalysis: unexpected error for event_id=%s", event_id)
             return Response({"detail": "Internal server error"}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
@@ -150,13 +204,30 @@ class GetAnalysis(APIView):
 class FlagsList(APIView):
     """
     GET /api/v1/flags
-    Always returns empty list in DB-less mode.
+    Returns flags, optionally filtered by ?severity= or ?status=
     """
     permission_classes = [AllowAny]
 
     def get(self, request):
         try:
-            return Response([])
+            if not USE_DB:
+                return Response([])
+
+            from flags.models import Flag
+            from .serializers import FlagSerializer
+
+            qs = Flag.objects.select_related("event").order_by("-created_at")
+
+            severity = request.GET.get("severity")
+            if severity:
+                qs = qs.filter(severity=severity)
+
+            flag_status = request.GET.get("status")
+            if flag_status:
+                qs = qs.filter(status=flag_status)
+
+            return Response(FlagSerializer(qs[:200], many=True).data)
+
         except Exception:
             logger.exception("FlagsList: unexpected error")
             return Response({"detail": "Internal server error"}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)

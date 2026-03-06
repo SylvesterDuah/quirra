@@ -1,40 +1,36 @@
 # quirra/settings.py
+
+
 import os
 from pathlib import Path
 
-# Optional .env for local dev
 try:
-    from dotenv import load_dotenv  # type: ignore
+    from dotenv import load_dotenv
     load_dotenv()
 except Exception:
     pass
 
-import dj_database_url  # type: ignore
+import dj_database_url 
 
 BASE_DIR = Path(__file__).resolve().parent.parent
 
 # ------------------------------------------------------------------ Core
-SECRET_KEY = os.environ.get("SECRET_KEY", "dev-insecure")
-DEBUG = os.environ.get("DEBUG", "0") in ("1", "true", "True")
+SECRET_KEY   = os.environ.get("SECRET_KEY", "dev-insecure")
+DEBUG        = os.environ.get("DEBUG", "0") in ("1", "true", "True")
 ALLOWED_HOSTS = [h.strip() for h in os.environ.get("ALLOWED_HOSTS", "*").split(",") if h.strip()] or ["*"]
 
 # ------------------------------------------------------------------ Apps
 INSTALLED_APPS = [
-    # Django
     "django.contrib.admin",
     "django.contrib.auth",
     "django.contrib.contenttypes",
     "django.contrib.sessions",
     "django.contrib.messages",
     "django.contrib.staticfiles",
-
-    # Third-party
     "rest_framework",
     "django_filters",
     "corsheaders",
     "whitenoise.runserver_nostatic",
-
-    # Project apps
     "events",
     "analysis",
     "flags",
@@ -45,13 +41,8 @@ INSTALLED_APPS = [
 # ------------------------------------------------------------------ Middleware
 MIDDLEWARE = [
     "django.middleware.security.SecurityMiddleware",
-
-    # WhiteNoise for static files on Render/any WSGI
     "whitenoise.middleware.WhiteNoiseMiddleware",
-
-    # CORS must come before CommonMiddleware
     "corsheaders.middleware.CorsMiddleware",
-
     "django.contrib.sessions.middleware.SessionMiddleware",
     "django.middleware.common.CommonMiddleware",
     "django.middleware.csrf.CsrfViewMiddleware",
@@ -60,7 +51,8 @@ MIDDLEWARE = [
     "django.middleware.clickjacking.XFrameOptionsMiddleware",
 ]
 
-ROOT_URLCONF = "quirra.urls"
+ROOT_URLCONF      = "quirra.urls"
+WSGI_APPLICATION  = "quirra.wsgi.application"
 
 TEMPLATES = [
     {
@@ -77,8 +69,6 @@ TEMPLATES = [
     }
 ]
 
-WSGI_APPLICATION = "quirra.wsgi.application"
-
 # ------------------------------------------------------------------ Database
 DATABASES = {
     "default": dj_database_url.parse(
@@ -89,13 +79,13 @@ DATABASES = {
 
 # ------------------------------------------------------------------ I18N
 LANGUAGE_CODE = "en-us"
-TIME_ZONE = "UTC"
-USE_I18N = True
-USE_TZ = True
+TIME_ZONE     = "UTC"
+USE_I18N      = True
+USE_TZ        = True
 
-# ------------------------------------------------------------------ Static (WhiteNoise)
-STATIC_URL = "/static/"
-STATIC_ROOT = BASE_DIR / "staticfiles"
+# ------------------------------------------------------------------ Static
+STATIC_URL         = "/static/"
+STATIC_ROOT        = BASE_DIR / "staticfiles"
 STATICFILES_STORAGE = "whitenoise.storage.CompressedManifestStaticFilesStorage"
 
 # ------------------------------------------------------------------ DRF
@@ -104,14 +94,12 @@ REST_FRAMEWORK = {
 }
 
 # ------------------------------------------------------------------ CORS / CSRF
-# By default, allow all origins to make testing easier.
-# For production, set CORS_ALLOW_ALL_ORIGINS=0 and configure CORS_ALLOWED_ORIGINS env var.
 CORS_ALLOW_ALL_ORIGINS = os.environ.get("CORS_ALLOW_ALL_ORIGINS", "1") in ("1", "true", "True")
 
 _allowed = [s.strip() for s in os.environ.get("CORS_ALLOWED_ORIGINS", "").split(",") if s.strip()]
 if _allowed:
     CORS_ALLOW_ALL_ORIGINS = False
-    CORS_ALLOWED_ORIGINS = _allowed
+    CORS_ALLOWED_ORIGINS   = _allowed
 
 _csrf = [s.strip() for s in os.environ.get("CSRF_TRUSTED_ORIGINS", "").split(",") if s.strip()]
 if _csrf:
@@ -119,24 +107,27 @@ if _csrf:
 
 # ------------------------------------------------------------------ Quirra knobs
 QUIRRA_DEFAULTS = {
-    "STORE_RAW": False,
-    "SIMHASH_THRESHOLD": int(os.environ.get("SIMHASH_THRESHOLD", "6")),
-    "STYLE_SAME_THRESHOLD": float(os.environ.get("STYLE_SAME_THRESHOLD", "0.7")),
-    "RISK_THRESHOLD": float(os.environ.get("RISK_THRESHOLD", "0.75")),
+    "STORE_RAW":             False,
+    "SIMHASH_THRESHOLD":     int(os.environ.get("SIMHASH_THRESHOLD",   "6")),
+    "STYLE_SAME_THRESHOLD":  float(os.environ.get("STYLE_SAME_THRESHOLD", "0.7")),
+    "RISK_THRESHOLD":        float(os.environ.get("RISK_THRESHOLD",    "0.75")),
 }
 
-# Shared secret for ingestion (leave empty => localhost-only in guarded view)
-INGEST_SECRET = os.environ.get("INGEST_SECRET", "")
-
-# Salt for server-side keyed hashing (/api/v1/hash)
-# NOTE: Must be kept secret. If longer than 32 bytes the code will derive a 32-byte key automatically.
+INGEST_SECRET    = os.environ.get("INGEST_SECRET",    "")
 QUIRRA_USER_SALT = os.environ.get("QUIRRA_USER_SALT", "")
 
-# ------------------------------------------------------------------ Celery (optional)
-CELERY_BROKER_URL = os.environ.get("CELERY_BROKER_URL", "redis://localhost:6379/0")
+# ------------------------------------------------------------------ Celery
+CELERY_BROKER_URL     = os.environ.get("CELERY_BROKER_URL",     "redis://localhost:6379/0")
 CELERY_RESULT_BACKEND = os.environ.get("CELERY_RESULT_BACKEND", "redis://localhost:6379/0")
 
 # ------------------------------------------------------------------ Security
 SECURE_PROXY_SSL_HEADER = ("HTTP_X_FORWARDED_PROTO", "https")
-SESSION_COOKIE_SECURE = os.environ.get("SESSION_COOKIE_SECURE", "1") in ("1", "true", "True")
-CSRF_COOKIE_SECURE = os.environ.get("CSRF_COOKIE_SECURE", "1") in ("1", "true", "True")
+
+
+SESSION_COOKIE_SECURE = os.environ.get("SESSION_COOKIE_SECURE", "0") in ("1", "true", "True")
+CSRF_COOKIE_SECURE    = os.environ.get("CSRF_COOKIE_SECURE",    "0") in ("1", "true", "True")
+
+# ------------------------------------------------------------------ Debug endpoint gate
+QUIRRA_EXPOSE_DEBUG_ENDPOINT = os.environ.get(
+    "QUIRRA_EXPOSE_DEBUG_ENDPOINT", "1" if DEBUG else "0"
+) in ("1", "true", "True")
